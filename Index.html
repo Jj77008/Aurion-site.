@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Assistente Inteligente</title>
+  <style>
+    :root { 
+      --bg: #000000; --card: #121212; --border: #282828; 
+      --accent: #3b82f6; --text: #ffffff; --muted: #a1a1aa; 
+    }
+    body { 
+      margin: 0; font-family: sans-serif; background: var(--bg); 
+      color: var(--text); display: flex; flex-direction: column; height: 100vh; 
+    }
+    #app { display: flex; flex-direction: column; padding: 16px; gap: 12px; height: 100%; }
+    .hud { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .box { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+    .box strong { display: block; font-size: 16px; color: var(--accent); margin-top: 4px; }
+    #log { flex: 1; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow-y: auto; font-size: 14px; }
+    .msg { margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+    .input-group { display: flex; gap: 8px; }
+    input, button { background: var(--card); border: 1px solid var(--border); color: #fff; padding: 12px; border-radius: 8px; font-size: 16px; }
+    input { flex: 1; }
+    button { background: var(--accent); border: none; font-weight: bold; cursor: pointer; }
+  </style>
+</head>
+<body>
+
+  <div id="app">
+    <div class="hud">
+      <div class="box">Saldo<strong id="hud-saldo">R$ 0,00</strong></div>
+      <div class="box">Agenda<strong id="hud-agenda">0 clientes</strong></div>
+    </div>
+    <div>
+      <button onclick="configurarChave()">Configurar API</button>
+      <button onclick="gerarRelatorio()">Resumo</button>
+    </div>
+    <div id="log"></div>
+    <div class="input-group">
+      <input type="text" id="input" placeholder="Digite um comando..." onkeypress="if(event.key==='Enter') enviar()">
+      <button onclick="enviar()">Enviar</button>
+    </div>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyDxqbwzst9XYD460orJQE503mQbTvtLE_U",
+      authDomain: "jarvis-88c9f.firebaseapp.com",
+      projectId: "jarvis-88c9f",
+      storageBucket: "jarvis-88c9f.firebasestorage.app",
+      messagingSenderId: "665385907551",
+      appId: "1:665385907551:web:bc8946b3a421c1c80af2ea"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const dbFirestore = getFirestore(app);
+
+    const DB_KEY = "jarvis_stable_core_v7";
+    let db = JSON.parse(localStorage.getItem(DB_KEY)) || {
+      apiKey: "",
+      financas: [],
+      agendamentos: []
+    };
+
+    function salvar() {
+      localStorage.setItem(DB_KEY, JSON.stringify(db));
+      atualizarHUD();
+    }
+
+    function atualizarHUD() {
+      const saldo = db.financas.reduce((acc, i) => i.tipo === 'entrada' ? acc + i.valor : acc - i.valor, 0);
+      const ativos = db.agendamentos.filter(a => a.status === 'ativo').length;
+      document.getElementById('hud-saldo').innerText = `R$ ${saldo.toFixed(2).replace('.', ',')}`;
+      document.getElementById('hud-agenda').innerText = `${ativos} clientes`;
+    }
+
+    function log(txt) {
+      const area = document.getElementById('log');
+      const div = document.createElement('div');
+      div.className = 'msg';
+      div.innerHTML = txt;
+      area.appendChild(div);
+      area.scrollTop = area.scrollHeight;
+    }
+
+    function falar(txt) {
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(txt.replace(/<[^>]*>/g, ''));
+        u.lang = 'pt-BR';
+        window.speechSynthesis.speak(u);
+      }
+    }
+
+    window.configurarChave = function() {
+      const chave = prompt("Insira a chave API Gemini:", db.apiKey);
+      if (chave !== null) {
+        db.apiKey = chave.trim();
+        salvar();
+        log("Chave salva com sucesso.");
+      }
+    };
+
+    window.gerarRelatorio = function() {
+      const saldo = db.financas.reduce((acc, i) => i.tipo === 'entrada' ? acc + i.valor : acc - i.valor, 0);
+      const ativos = db.agendamentos.filter(a => a.status === 'ativo').length;
+      const msg = `Saldo: R$ ${saldo.toFixed(2)} | Agenda: ${ativos} ativos.`;
+      log(msg);
+      falar(msg);
+    };
+
+    window.enviar = async function() {
+      const input = document.getElementById('input');
+      const cmd = input.value.trim();
+      if (!cmd) return;
+      
+      log(`<strong>Você:</strong> ${cmd}`);
+      input.value = '';
+
+      if (cmd.toLowerCase().startsWith('pix ')) {
+        const partes = cmd.split(' ');
+        const valor = parseFloat(partes[1].replace(',', '.'));
+        if (!isNaN(valor)) {
+          db.financas.push({ tipo: 'entrada', valor, data: new Date().toISOString() });
+          salvar();
+          const r = `Registrado recebimento de R$ ${valor.toFixed(2)}.`;
+          log(r);
+          falar(r);
+          return;
+        }
+      }
+
+      if (cmd.toLowerCase().startsWith('agendar ')) {
+        db.agendamentos.push({ cliente: cmd.replace('agendar ', ''), status: 'ativo' });
+        salvar();
+        const r = "Cliente adicionado à agenda.";
+        log(r);
+        falar(r);
+        return;
+      }
+
+      if (db.apiKey) {
+        try {
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${db.apiKey}`;
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({contents: [{parts: [{text: cmd}]}]})
+          });
+          const data = await res.json();
+          const resp = data.candidates?.[0]?.content?.parts?.[0]?.text || "Sem resposta.";
+          log(`<strong>IA:</strong> ${resp.replace(/\n/g, '<br>')}`);
+          falar(resp);
+        } catch (e) {
+          log("Erro ao consultar IA.");
+        }
+      } else {
+        const fallback = "Comando registrado. Configure a chave API para respostas inteligentes.";
+        log(fallback);
+        falar(fallback);
+      }
+    };
+
+    atualizarHUD();
+    log("Sistema pronto. Digite 'pix [valor]' ou 'agendar [nome]'.");
+  </script>
+</body>
+</html>
