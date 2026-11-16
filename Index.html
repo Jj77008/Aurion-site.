@@ -1,1 +1,310 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Notas</title>
+  <meta name="theme-color" content="#0d1117">
+  <style>
+    :root { 
+      --bg: #0d1117; --card: #161b22; --border: #30363d; 
+      --accent: #238636; --text: #c9d1d9; --muted: #8b949e; 
+    }
+    * { box-sizing: border-box; }
+    body { 
+      margin: 0; font-family: system-ui, sans-serif; background: var(--bg); 
+      color: var(--text); display: flex; flex-direction: column; height: 100vh; 
+    }
+    #auth-screen { 
+      flex: 1; display: flex; flex-direction: column; 
+      justify-content: center; align-items: center; padding: 20px; 
+    }
+    #main-screen { 
+      display: none; flex: 1; flex-direction: column; padding: 12px; 
+      gap: 10px; overflow: hidden; 
+    }
+    .hud { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .hud-box { 
+      background: var(--card); border: 1px solid var(--border); 
+      border-radius: 8px; padding: 10px; font-size: 12px; 
+    }
+    .hud-box strong { display: block; font-size: 16px; color: #58a6ff; margin-top: 2px; }
+    #log-area { 
+      flex: 1; background: var(--card); border: 1px solid var(--border); 
+      border-radius: 8px; padding: 12px; overflow-y: auto; font-size: 14px; line-height: 1.5; 
+    }
+    .msg { margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #21262d; }
+    .msg-jarvis { color: #e6edf3; }
+    .msg-sys { color: var(--muted); font-size: 12px; }
+    .input-bar { display: flex; gap: 6px; }
+    input, button { 
+      background: var(--card); border: 1px solid var(--border); color: #fff; 
+      padding: 12px; border-radius: 8px; font-size: 15px; 
+    }
+    input { flex: 1; }
+    button { background: var(--accent); border: none; font-weight: bold; cursor: pointer; }
+    .btn-sec { background: #21262d; padding: 8px 10px; font-size: 12px; }
+  </style>
+</head>
+<body>
+
+  <!-- Tela de PIN -->
+  <div id="auth-screen">
+    <input type="password" id="pin-input" placeholder="PIN" maxlength="6" inputmode="numeric" onkeypress="if(event.key==='Enter') verificarPin()">
+    <button onclick="verificarPin()" style="width: 200px; margin-top: 10px;">Acessar</button>
+  </div>
+
+  <!-- Núcleo Jarvis -->
+  <div id="main-screen">
+    <div class="hud">
+      <div class="hud-box">Caixa Líquido (Mês)<strong id="hud-saldo">R$ 0,00</strong></div>
+      <div class="hud-box">Agendamentos Ativos<strong id="hud-agenda">0 clientes</strong></div>
+    </div>
+
+    <div style="display:flex; gap:6px; justify-content: flex-end;">
+      <button class="btn-sec" onclick="configurarChaveIA()">API IA</button>
+      <button class="btn-sec" onclick="gerarRelatorio()">Resumo Geral</button>
+    </div>
+
+    <div id="log-area"></div>
+
+    <div class="input-bar">
+      <input type="text" id="cmd-input" placeholder="Pesquisar, colar link ou comandar..." onkeypress="if(event.key==='Enter') processarComando()">
+      <button onclick="processarComando()">Enviar</button>
+    </div>
+  </div>
+
+  <script>
+    const PIN_CORRETO = "1234"; 
+    const DB_KEY = "jarvis_db_v2";
+
+    let db = JSON.parse(localStorage.getItem(DB_KEY)) || {
+      apiKey: "",
+      meuNome: "Jackson Carlos Leandro",
+      financas: [],      
+      agendamentos: [],  
+      notificacoes: [],  
+      conhecimento: []   
+    };
+
+    function salvarDB() {
+      localStorage.setItem(DB_KEY, JSON.stringify(db));
+      atualizarHUD();
+    }
+
+    // Registro do Service Worker embutido para PWA e autoatualização
+    const swCode = `
+      const CACHE_NAME = 'jarvis-full-v1';
+      self.addEventListener('install', (e) => {
+        self.skipWaiting();
+        e.waitUntil(caches.open(CACHE_NAME).then((c) => c.addAll(['/'])));
+      });
+      self.addEventListener('activate', (e) => {
+        e.waitUntil(caches.keys().then((keys) => Promise.all(keys.map((k) => k !== CACHE_NAME ? caches.delete(k) : null))).then(() => self.clients.claim()));
+      });
+      self.addEventListener('fetch', (e) => {
+        e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
+      });
+    `;
+
+    if ('serviceWorker' in navigator) {
+      const blob = new Blob([swCode], { type: 'application/javascript' });
+      const swUrl = URL.createObjectURL(blob);
+      navigator.serviceWorker.register(swUrl).then((reg) => {
+        reg.addEventListener('updatefound', () => {
+          const nw = reg.installing;
+          nw.addEventListener('statechange', () => {
+            if (nw.state === 'activated') log("Sistema atualizado na memória.", "sys");
+          });
+        });
+      });
+    }
+
+    function verificarPin() {
+      if (document.getElementById('pin-input').value === PIN_CORRETO) {
+        document.getElementById('auth-screen').style.display = 'none';
+        document.getElementById('main-screen').style.display = 'flex';
+        iniciarSistema();
+      } else {
+        document.getElementById('pin-input').value = '';
+      }
+    }
+
+    function iniciarSistema() {
+      atualizarHUD();
+      const pendentes = db.notificacoes.slice(-3);
+      log("Sistemas online, Senhor. O que deseja priorizar agora?", "jarvis");
+      if (pendentes.length > 0) {
+        log(`Últimos registros em segundo plano: ${pendentes.map(n => `[${n.app}] ${n.texto}`).join(' | ')}`, "sys");
+      }
+    }
+
+    function atualizarHUD() {
+      const saldo = db.financas.reduce((acc, item) => item.tipo === 'entrada' ? acc + item.valor : acc - item.valor, 0);
+      const ativos = db.agendamentos.filter(a => a.status === 'ativo').length;
+      document.getElementById('hud-saldo').innerText = `R$ ${saldo.toFixed(2).replace('.', ',')}`;
+      document.getElementById('hud-agenda').innerText = `${ativos} ativos`;
+    }
+
+    function log(html, tipo = "jarvis") {
+      const area = document.getElementById('log-area');
+      const div = document.createElement('div');
+      div.className = `msg msg-${tipo}`;
+      div.innerHTML = tipo === "jarvis" ? `<strong>Jarvis:</strong> ${html}` : html;
+      area.appendChild(div);
+      area.scrollTop = area.scrollHeight;
+    }
+
+    function configurarChaveIA() {
+      const chave = prompt("Cole sua chave API (Gemini):", db.apiKey);
+      if (chave !== null) {
+        db.apiKey = chave.trim();
+        salvarDB();
+        log("Chave de inteligência conectada.", "sys");
+      }
+    }
+
+    // Processamento de Notificações
+    function processarNotificacao(app, texto) {
+      const data = new Date().toISOString();
+      db.notificacoes.push({ app, texto, data });
+      const txtLower = texto.toLowerCase();
+
+      if (txtLower.includes('pix') || txtLower.includes('r$')) {
+        const matchValor = texto.match(/r\$\s?(\d+[.,]\d{2})/i);
+        if (matchValor) {
+          const valor = parseFloat(matchValor[1].replace(',', '.'));
+          if (txtLower.includes('jackson') || txtLower.includes('mesma titularidade')) {
+            salvarDB();
+            return;
+          }
+          const isEntrada = txtLower.includes('recebeu') || txtLower.includes('recebido') || txtLower.includes('transferência recebida');
+          db.financas.push({
+            tipo: isEntrada ? 'entrada' : 'saida',
+            valor: valor,
+            desc: `${app}: ${texto}`,
+            data
+          });
+        }
+      }
+
+      if (txtLower.includes('agendou') || txtLower.includes('marcou') || txtLower.includes('agendamento')) {
+        db.agendamentos.push({ cliente: texto, info: app, status: 'ativo', data });
+      } else if (txtLower.includes('cancelou') || txtLower.includes('cancelado')) {
+        db.agendamentos.push({ cliente: texto, info: app, status: 'cancelado', data });
+      }
+
+      salvarDB();
+    }
+
+    // Varredura de Links e IA
+    async function analisarLinkOuBusca(entrada) {
+      log("Varrendo fontes e extraindo dados...", "sys");
+      try {
+        if (entrada.startsWith('http')) {
+          const res = await fetch(`https://r.jina.ai/${encodeURIComponent(entrada)}`);
+          const conteudo = await res.text();
+          const trecho = conteudo.slice(0, 4000);
+
+          db.conhecimento.push({ fonte: entrada, resumo: trecho.slice(0, 300), data: new Date().toISOString() });
+          salvarDB();
+
+          if (db.apiKey) {
+            await consultarGemini(`Analise este conteúdo extraído de ${entrada} e explique os pontos principais de forma direta e prática:\n\n${trecho}`);
+          } else {
+            log(`Conteúdo extraído:<br><br>${trecho.slice(0, 600)}...<br><br><em>(Configure sua chave API no topo para resumos completos)</em>`);
+          }
+          return;
+        }
+
+        if (db.apiKey) {
+          await consultarGemini(`Você é o Jarvis, assistente pessoal do Jackson. Responda de forma direta e atualizada sobre: ${entrada}`);
+        } else {
+          const wikiRes = await fetch(`https://pt.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(entrada)}`);
+          if (wikiRes.ok) {
+            const wikiData = await wikiRes.json();
+            log(`<strong>${wikiData.title}:</strong> ${wikiData.extract}`);
+          } else {
+            log(`Registrei sua busca "${entrada}". Insira sua chave API no botão "API IA" para ativar a varredura web.`);
+          }
+        }
+      } catch (e) {
+        log("Falha na varredura de rede.", "sys");
+      }
+    }
+
+    async function consultarGemini(promptTexto) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${db.apiKey}`;
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: promptTexto }] }],
+            tools: [{ google_search: {} }]
+          })
+        });
+        const data = await response.json();
+        const resposta = data.candidates?.[0]?.content?.parts?.[0]?.text || "Sem retorno da rede.";
+        log(resposta.replace(/\n/g, '<br>'));
+      } catch (err) {
+        log("Erro ao conectar com o motor de IA.", "sys");
+      }
+    }
+
+    function processarComando() {
+      const input = document.getElementById('cmd-input');
+      const cmd = input.value.trim();
+      if (!cmd) return;
+
+      log(`<strong>Senhor:</strong> ${cmd}`, "sys");
+      input.value = '';
+      const low = cmd.toLowerCase();
+
+      if (low === 'como estou?' || low === 'resumo') {
+        gerarRelatorio();
+      } else if (low.startsWith('recebi ') || low.startsWith('gastei ')) {
+        const partes = cmd.split(' ');
+        const valor = parseFloat(partes[1].replace(',', '.'));
+        if (!isNaN(valor)) {
+          const tipo = low.startsWith('recebi') ? 'entrada' : 'saida';
+          db.financas.push({ tipo, valor, desc: cmd, data: new Date().toISOString() });
+          salvarDB();
+          log(`Registrado: ${tipo.toUpperCase()} de R$ ${valor.toFixed(2)}.`);
+        }
+      } else {
+        analisarLinkOuBusca(cmd);
+      }
+    }
+
+    function gerarRelatorio() {
+      const entradas = db.financas.filter(f => f.tipo === 'entrada').reduce((a, b) => a + b.valor, 0);
+      const saidas = db.financas.filter(f => f.tipo === 'saida').reduce((a, b) => a + b.valor, 0);
+      const cancelados = db.agendamentos.filter(a => a.status === 'cancelado').length;
+      const ativos = db.agendamentos.filter(a => a.status === 'ativo').length;
+
+      log(`
+        <strong>Relatório Operacional:</strong><br>
+        • Faturamento Bruto: R$ ${entradas.toFixed(2)}<br>
+        • Saídas/Gastos: R$ ${saidas.toFixed(2)}<br>
+        • Saldo Líquido: R$ ${(entradas - saidas).toFixed(2)}<br>
+        • Agenda: ${ativos} confirmados | ${cancelados} cancelados<br>
+        • Notificações mapeadas: ${db.notificacoes.length}<br>
+        • Links/Estudos salvos: ${db.conhecimento.length}
+      `);
+    }
+
+    // Receptor de Notificações do Android
+    window.addEventListener('DOMContentLoaded', () => {
+      const params = new URLSearchParams(window.location.search);
+      const app = params.get('app');
+      const msg = params.get('msg');
+      if (app && msg) {
+        processarNotificacao(decodeURIComponent(app), decodeURIComponent(msg));
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    });
+  </script>
+</body>
+</html>
 
